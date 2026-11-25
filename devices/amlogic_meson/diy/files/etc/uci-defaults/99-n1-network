@@ -16,6 +16,8 @@ add_list network.lan.dns='119.29.29.29'
 set dhcp.lan.ignore='1'
 commit network
 commit dhcp
+set luci.main.mediaurlbase='/luci-static/vantage'
+commit luci
 EOF
 
 exit 0
