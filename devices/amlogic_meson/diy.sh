@@ -108,3 +108,24 @@ sed -i 's/DEFAULT_PACKAGES +=/DEFAULT_PACKAGES += luci-app-diskman automount/' t
     echo "== N1 Honk: feed and pinned toolchains ready =="
 )
 # END N1-HONK-ACTIONS
+
+# BEGIN N1-NIKKI-CLASHOO-CORE
+# Nikki uses the Mihomo core; Clashoo ships a compatible core and provides
+# the virtual "mihomo" package. Reuse that one copy to avoid competing
+# /usr/bin/mihomo providers in the final rootfs.
+NIKKI_MAKEFILE="package/feeds/kiddin9/nikki/Makefile"
+if [ -f "$NIKKI_MAKEFILE" ]; then
+    if grep -q '+mihomo' "$NIKKI_MAKEFILE"; then
+        sed -i 's/+mihomo/+clashoo/g' "$NIKKI_MAKEFILE"
+    fi
+    grep -q '+clashoo' "$NIKKI_MAKEFILE" || {
+        echo "::error::Nikki package dependency could not be redirected to Clashoo Mihomo core"
+        exit 1
+    }
+else
+    echo "::error::Nikki feed package Makefile not found: $NIKKI_MAKEFILE"
+    exit 1
+fi
+# END N1-NIKKI-CLASHOO-CORE
+
+
