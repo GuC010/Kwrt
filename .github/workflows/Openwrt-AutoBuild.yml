@@ -293,7 +293,10 @@ jobs:
         set -euo pipefail
         cd openwrt
         echo "== Preflight: build the selected PassWall2 Xray core before the full firmware =="
-        GITHUB_REF=refs/tags/v0.1.0-beta.6 make -j2 package/feeds/kiddin9/xray-core/compile V=s 2>&1 | tee "$GITHUB_WORKSPACE/xray-preflight.log"
+        # Build the target toolchain serially first. Xray's Go host-toolchain
+        # bootstrap can otherwise race package/libs/toolchain and miss libgcc_s.
+        make -j1 toolchain/install V=s 2>&1 | tee "$GITHUB_WORKSPACE/toolchain-preflight.log"
+        GITHUB_REF=refs/tags/v0.1.0-beta.6 make -j1 package/feeds/kiddin9/xray-core/compile V=s 2>&1 | tee "$GITHUB_WORKSPACE/xray-preflight.log"
 
     - name: SSH connection to Actions
       uses: kiddin9/debugger-action@master
@@ -323,6 +326,7 @@ jobs:
       with:
         name: n1-build-diagnostics-${{ matrix.target }}
         path: |
+          toolchain-preflight.log
           xray-preflight.log
           firmware-build.log
           openwrt/logs/**
