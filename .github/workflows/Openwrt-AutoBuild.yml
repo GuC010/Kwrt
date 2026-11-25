@@ -8,9 +8,16 @@
 
 name: Build OpenWrt
 
-on: 
+on:
   workflow_dispatch:
   repository_dispatch:
+  push:
+    branches:
+      - 25.12
+    paths:
+      - '.github/workflows/Openwrt-AutoBuild.yml'
+      - 'devices/amlogic_meson/**'
+      - 'devices/common/**'
 
 env:
   REPO_TOKEN: ${{ secrets.TOKEN_KIDDIN9 }}
@@ -221,6 +228,36 @@ jobs:
         grep -qx 'CONFIG_PACKAGE_v2ray-geoip=y' "$cfg"
         grep -qx 'CONFIG_PACKAGE_v2ray-geosite=y' "$cfg"
         echo 'N1 SquashFS + Honk + built-in BTF configuration verified'
+
+    - name: Verify final N1 LuCI and service package selections
+      run: |
+        set -euo pipefail
+        cfg=openwrt/.config
+        required=(
+          uhttpd uhttpd-mod-ubus uhttpd-mod-ucode
+          luci-mod-network luci-mod-system luci-mod-status
+          luci-app-vantage luci-theme-vantage luci-theme-footstrap
+          luci-theme-alpha luci-theme-argon luci-theme-bootstrap
+          luci-app-advancedplus luci-app-alpha-config luci-app-crontab-wizard
+          luci-app-diskman luci-app-fan luci-app-firewall luci-app-footstrap-files
+          luci-app-honk luci-app-oui luci-app-package-manager luci-app-partexp
+          luci-app-syscontrol luci-app-sysctl luci-app-upnp luci-app-wifihistory luci-app-wizard
+          luci-app-openclash luci-app-passwall2 luci-app-nikki
+          luci-app-clashoo luci-app-homebox luci-app-fastnet
+          clashoo nikki homebox fastnet linkease-app-entry luci-lib-linkeaseauth
+          luci-app-passwall2_Basic_Core_Xray luci-app-passwall2_Nftables_Transparent_Proxy
+          dnsmasq-full firewall4 ip-full kmod-inet-diag kmod-nft-socket
+          kmod-nft-tproxy kmod-tun kmod-dummy
+        )
+        for pkg in "${required[@]}"; do
+          grep -qx "CONFIG_PACKAGE_${pkg}=y" "$cfg" || {
+            echo "::error::Required final N1 package was not selected: ${pkg}"
+            grep -E "^CONFIG_PACKAGE_${pkg}=" "$cfg" || true
+            exit 1
+          }
+        done
+        echo 'Verified Vantage + core LuCI menus + Honk + requested six services'
+
     - name: Cache
       uses: stupidloud/cachewrtbuild@main
       with:
@@ -258,6 +295,10 @@ jobs:
           exit 1
         fi
         printf 'Verified N1 SquashFS image: %s\n' "${images[@]}"
+        for image in "${images[@]}"; do
+          gzip -t "$image"
+          echo "gzip integrity OK: $image"
+        done
     - name: Organize files
       id: organize
       continue-on-error: true
