@@ -26,7 +26,11 @@ if [ ! -f /etc/config/homebox ]; then
     cat > /etc/config/homebox <<'HOMEBOX_EOF'
 config homebox 'homebox'
         option enabled '0'
+        option host '192.168.10.251'
+        option port '3300'
 HOMEBOX_EOF
 fi
+
+[ -x /etc/init.d/homebox ] && /etc/init.d/homebox enable
 
 exit 0
