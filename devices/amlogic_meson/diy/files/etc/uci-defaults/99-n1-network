@@ -20,4 +20,13 @@ set luci.main.mediaurlbase='/luci-static/vantage'
 commit luci
 EOF
 
+# Homebox's LuCI controller registers its menu only when /etc/config/homebox exists.
+# Keep the service disabled on first boot; the user can enable it after configuring it.
+if [ ! -f /etc/config/homebox ]; then
+    cat > /etc/config/homebox <<'HOMEBOX_EOF'
+config homebox 'homebox'
+        option enabled '0'
+HOMEBOX_EOF
+fi
+
 exit 0
