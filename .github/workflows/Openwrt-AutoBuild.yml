@@ -276,6 +276,8 @@ jobs:
         grep -qx 'CONFIG_PACKAGE_firewall4=y' "$cfg"
         echo 'Verified Vantage + core LuCI menus + Honk + requested services + Netdata + firewall4-only'
         grep -q '+clashoo' openwrt/package/feeds/kiddin9/nikki/Makefile
+        grep -qx 'PKG_BUILD_DEPENDS:=golang1.27/host' openwrt/feeds/kiddin9/xray-core/Makefile
+        grep -qx 'GO_VERSION_MAJOR_MINOR:=1.27' openwrt/feeds/packages/lang/golang/golang1.27/Makefile
 
     - name: Cache
       uses: stupidloud/cachewrtbuild@main

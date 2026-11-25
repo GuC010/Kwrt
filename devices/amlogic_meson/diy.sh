@@ -128,4 +128,30 @@ else
 fi
 # END N1-NIKKI-CLASHOO-CORE
 
+# BEGIN N1-XRAY-GO127
+# Xray 26.11.x requires Go >= 1.27. Keep the global Go default unchanged
+# for other packages, but pin Xray to the Go 1.27 host toolchain.
+XRAY_MAKEFILE="$(readlink -f package/feeds/kiddin9/xray-core/Makefile)"
+GO127_MAKEFILE="feeds/packages/lang/golang/golang1.27/Makefile"
+
+if [ ! -f "$XRAY_MAKEFILE" ]; then
+    echo "::error::Xray package Makefile not found: $XRAY_MAKEFILE"
+    exit 1
+fi
+if [ ! -f "$GO127_MAKEFILE" ] || ! grep -qx 'GO_VERSION_MAJOR_MINOR:=1.27' "$GO127_MAKEFILE"; then
+    echo "::error::OpenWrt packages feed does not provide the expected Go 1.27 toolchain"
+    exit 1
+fi
+
+if grep -qx 'PKG_BUILD_DEPENDS:=golang/host' "$XRAY_MAKEFILE"; then
+    sed -i 's/^PKG_BUILD_DEPENDS:=golang\/host$/PKG_BUILD_DEPENDS:=golang1.27\/host/' "$XRAY_MAKEFILE"
+fi
+grep -qx 'PKG_BUILD_DEPENDS:=golang1.27/host' "$XRAY_MAKEFILE" || {
+    echo "::error::Xray was not pinned to golang1.27/host"
+    grep -n '^PKG_BUILD_DEPENDS' "$XRAY_MAKEFILE" || true
+    exit 1
+}
+echo "Verified Xray host toolchain dependency: Go 1.27"
+# END N1-XRAY-GO127
+
 
