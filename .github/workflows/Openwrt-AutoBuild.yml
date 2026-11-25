@@ -320,6 +320,62 @@ jobs:
         rm -rf staging_dir/toolchain-*/initial
         df -hT
 
+    - name: Collect N1 kernel module packages
+      if: success() && matrix.target == 'amlogic_meson'
+      id: collect_kmods
+      run: |
+        set -euo pipefail
+        cd openwrt
+        out="$GITHUB_WORKSPACE/n1-kmod-packages"
+        mkdir -p "$out/packages"
+        : > "$out/package-files.txt"
+        for pkgname in kmod-tun kmod-inet-diag kmod-dummy; do
+          mapfile -t matches < <(find bin/packages bin/targets -type f -name "${pkgname}_*.ipk" 2>/dev/null | sort)
+          if [ "${#matches[@]}" -eq 0 ]; then
+            echo "::error::Missing built package: ${pkgname}.ipk"
+            echo "MISSING: ${pkgname}" >> "$out/package-files.txt"
+            continue
+          fi
+          for pkg in "${matches[@]}"; do
+            cp -v "$pkg" "$out/packages/"
+            printf '%s\n' "$pkg" >> "$out/package-files.txt"
+          done
+        done
+        if grep -q '^MISSING:' "$out/package-files.txt"; then
+          echo "::error::One or more required N1 kernel module packages were not produced."
+          exit 1
+        fi
+        cp .config "$out/n1-firmware.config"
+        find build_dir/target-*/linux-*/linux-* -maxdepth 1 -name .config -type f -exec cp {} "$out/n1-kernel.config" \; 2>/dev/null || true
+        {
+          echo "Repository: GuC010/Kwrt"
+          echo "Branch: 25.12"
+          echo "Target: amlogic_meson / Phicomm N1"
+          echo "Commit: $GITHUB_SHA"
+          echo "Build date (UTC): $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          echo
+          echo "Required packages:"
+          echo "  kmod-tun"
+          echo "  kmod-inet-diag"
+          echo "  kmod-dummy"
+          echo
+          echo "Package files:"
+          find "$out/packages" -maxdepth 1 -type f -name '*.ipk' -printf '%f\n' | sort
+          echo
+          echo "SHA256:"
+          (cd "$out/packages" && sha256sum *.ipk)
+        } > "$out/README-MANIFEST.txt"
+        echo "Collected N1 kernel module packages:"
+        cat "$out/README-MANIFEST.txt"
+    - name: Upload N1 kernel module packages
+      if: always() && matrix.target == 'amlogic_meson'
+      uses: actions/upload-artifact@v4
+      with:
+        name: n1-kernel-modules-${{ github.run_number }}
+        path: n1-kmod-packages/
+        if-no-files-found: warn
+        retention-days: 30
+
     - name: Upload build diagnostics
       if: failure()
       uses: actions/upload-artifact@v4
