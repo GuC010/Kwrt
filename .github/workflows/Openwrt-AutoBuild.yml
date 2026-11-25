@@ -246,6 +246,7 @@ jobs:
           luci-app-clashoo luci-app-homebox luci-app-fastnet
           clashoo nikki homebox fastnet linkease-app-entry luci-lib-linkeaseauth
           luci-app-passwall2_Basic_Core_Xray luci-app-passwall2_Nftables_Transparent_Proxy
+          netdata luci-app-netdata protobuf protobuf-lite libatomic
           dnsmasq-full firewall4 ip-full kmod-inet-diag kmod-nft-socket
           kmod-nft-tproxy kmod-tun kmod-dummy
         )
@@ -256,7 +257,9 @@ jobs:
             exit 1
           }
         done
-        echo 'Verified Vantage + core LuCI menus + Honk + requested six services'
+        echo 'Verified Vantage + core LuCI menus + Honk + requested six services + Netdata'
+        grep -q 's/\+mihomo/\+clashoo/g' devices/amlogic_meson/diy.sh || true
+        grep -q '+clashoo' openwrt/package/feeds/kiddin9/nikki/Makefile
 
     - name: Cache
       uses: stupidloud/cachewrtbuild@main
