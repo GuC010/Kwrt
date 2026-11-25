@@ -241,7 +241,7 @@ jobs:
           luci-app-advancedplus luci-app-alpha-config luci-app-crontab-wizard
           luci-app-diskman luci-app-fan luci-app-firewall luci-app-footstrap-files
           luci-app-honk luci-app-oui luci-app-package-manager luci-app-partexp
-          luci-app-syscontrol luci-app-sysctl luci-app-upnp luci-app-wifihistory luci-app-wizard
+          luci-app-syscontrol luci-app-sysctl luci-app-wifihistory luci-app-wizard
           luci-app-openclash luci-app-passwall2 luci-app-nikki
           luci-app-clashoo luci-app-homebox luci-app-fastnet
           clashoo nikki homebox fastnet linkease-app-entry luci-lib-linkeaseauth
@@ -257,7 +257,11 @@ jobs:
             exit 1
           }
         done
-        echo 'Verified Vantage + core LuCI menus + Honk + requested six services + Netdata'
+        if grep -qx 'CONFIG_PACKAGE_luci-app-upnp=y' "$cfg"; then
+          echo '::error::UPnP was selected but is not in the requested N1 service menu set'
+          exit 1
+        fi
+        echo 'Verified Vantage + core LuCI menus + Honk + requested services + Netdata'
         grep -q '+clashoo' openwrt/package/feeds/kiddin9/nikki/Makefile
 
     - name: Cache
