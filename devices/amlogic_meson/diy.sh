@@ -33,10 +33,8 @@ sed -i 's/DEFAULT_PACKAGES +=/DEFAULT_PACKAGES += luci-app-diskman automount/' t
     # Keep this first Honk image intentionally small and avoid known-broken
     # optional packages from the previous OpenWrt.ai build logs. They can be
     # re-enabled one by one after the N1 boots reliably.
-    append_config '# CONFIG_PACKAGE_luci-app-clashoo is not set'
     append_config '# CONFIG_PACKAGE_luci-app-istorex is not set'
     append_config '# CONFIG_PACKAGE_luci-app-quickstart is not set'
-    append_config '# CONFIG_PACKAGE_luci-app-openclash is not set'
 
     echo "== N1 Honk: install host build prerequisites =="
     sudo apt-get update -qq
