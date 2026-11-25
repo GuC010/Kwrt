@@ -188,6 +188,8 @@ jobs:
         cp -Rf ./diy/* ./ || true
         test -f files/etc/uci-defaults/99-n1-network
         chmod 0755 files/etc/uci-defaults/99-n1-network
+        test -f files/etc/init.d/homebox
+        chmod 0755 files/etc/init.d/homebox
 
     - name: Apply patches
       run: |
