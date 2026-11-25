@@ -248,6 +248,7 @@ jobs:
           luci-app-clashoo luci-app-homebox luci-app-fastnet
           clashoo nikki homebox fastnet linkease-app-entry luci-lib-linkeaseauth
           luci-app-passwall2_Basic_Core_Xray luci-app-passwall2_Nftables_Transparent_Proxy
+          xray-core
           netdata luci-app-netdata protobuf protobuf-lite libatomic
           dnsmasq-full firewall4 ip-full kmod-inet-diag kmod-nft-socket
           kmod-nft-tproxy kmod-tun kmod-dummy
@@ -263,7 +264,17 @@ jobs:
           echo '::error::UPnP was selected but is not in the requested N1 service menu set'
           exit 1
         fi
-        echo 'Verified Vantage + core LuCI menus + Honk + requested services + Netdata'
+        # N1 is firewall4/nftables only; reject legacy firewall3/iptables packages.
+        legacy=(firewall miniupnpd-iptables iptables-mod-fullconenat ip6tables-mod-fullconenat kmod-ipt-fullconenat)
+        for pkg in "${legacy[@]}"; do
+          if grep -Eq "^CONFIG_PACKAGE_${pkg}=(y|m)$" "$cfg"; then
+            echo "::error::Legacy firewall package was selected: ${pkg}"
+            grep -E "^CONFIG_PACKAGE_${pkg}=" "$cfg" || true
+            exit 1
+          fi
+        done
+        grep -qx 'CONFIG_PACKAGE_firewall4=y' "$cfg"
+        echo 'Verified Vantage + core LuCI menus + Honk + requested services + Netdata + firewall4-only'
         grep -q '+clashoo' openwrt/package/feeds/kiddin9/nikki/Makefile
 
     - name: Cache
@@ -274,6 +285,14 @@ jobs:
         clean: ${{ contains(github.event.action, 'nocache') }}
         prefix: ${{ github.workspace }}/openwrt
 
+    - name: Preflight PassWall2 Xray core
+      id: xray_preflight
+      run: |
+        set -euo pipefail
+        cd openwrt
+        echo "== Preflight: build the selected PassWall2 Xray core before the full firmware =="
+        GITHUB_REF=refs/tags/v0.1.0-beta.6 make -j2 package/feeds/kiddin9/xray-core/compile V=s 2>&1 | tee "$GITHUB_WORKSPACE/xray-preflight.log"
+
     - name: SSH connection to Actions
       uses: kiddin9/debugger-action@master
       if: contains(github.event.action, 'ssh')
@@ -281,14 +300,33 @@ jobs:
     - name: Compile the firmware
       id: compile
       run: |
+        set -euo pipefail
         shopt -s extglob
         df -hT
         cd openwrt
         echo -e "$(($(nproc)+1)) thread compile"
-        GITHUB_REF=refs/tags/v0.1.0-beta.6 make -j$(($(nproc)+1)) || { log=$(mktemp);GITHUB_REF=refs/tags/v0.1.0-beta.6 make V=s &>$log; } || { tail -50 $log; curl -k --data chat_id="${{ env.TELEGRAM_CHAT_ID }}" --data "text=❌ OpenWrt ${{ env.VERSION }} ${{matrix.target}} 编译失败 😂" "https://api.telegram.org/bot${{ env.TELEGRAM_TOKEN }}/sendMessage";df -hT;exit 1; }
+        if ! GITHUB_REF=refs/tags/v0.1.0-beta.6 make -j$(($(nproc)+1)) 2>&1 | tee "$GITHUB_WORKSPACE/firmware-build.log"; then
+          echo "::error::OpenWrt firmware compilation failed; see the uploaded build-diagnostics artifact."
+          tail -n 150 "$GITHUB_WORKSPACE/firmware-build.log" || true
+          df -hT
+          exit 1
+        fi
         rm -rf staging_dir/toolchain-*/bin/*openwrt-linux-musl-lto-dump
         rm -rf staging_dir/toolchain-*/initial
         df -hT
+
+    - name: Upload build diagnostics
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: n1-build-diagnostics-${{ matrix.target }}
+        path: |
+          xray-preflight.log
+          firmware-build.log
+          openwrt/logs/**
+          openwrt/tmp/logs/**
+        if-no-files-found: warn
+        retention-days: 7
 
     - name: Verify N1 SquashFS artifact
       run: |
