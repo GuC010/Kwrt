@@ -249,7 +249,7 @@ jobs:
           clashoo nikki homebox fastnet linkease-app-entry luci-lib-linkeaseauth
           luci-app-passwall2_Basic_Core_Xray luci-app-passwall2_Nftables_Transparent_Proxy
           xray-core
-          netdata luci-app-netdata protobuf protobuf-lite libatomic
+          protobuf protobuf-lite libatomic
           dnsmasq-full firewall4 ip-full kmod-inet-diag kmod-nft-socket
           kmod-nft-tproxy kmod-tun kmod-dummy
         )
