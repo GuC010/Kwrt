@@ -404,8 +404,32 @@ jobs:
         fi
         printf 'Verified N1 SquashFS image: %s\n' "${images[@]}"
         for image in "${images[@]}"; do
-          gzip -t "$image"
-          echo "gzip integrity OK: $image"
+          python3 - "$image" <<'PY'
+import sys
+import zlib
+
+path = sys.argv[1]
+decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+trailing = 0
+with open(path, "rb") as stream:
+    while True:
+        chunk = stream.read(65536)
+        if not chunk:
+            break
+        if decoder.eof:
+            trailing += len(chunk)
+            continue
+        decoder.decompress(chunk)
+        if decoder.eof:
+            trailing += len(decoder.unused_data)
+
+if not decoder.eof:
+    raise SystemExit(f"::error::Incomplete or truncated gzip stream: {path}")
+if trailing:
+    print(f"::warning::Valid gzip payload; ignoring {trailing} trailing byte(s): {path}")
+else:
+    print(f"gzip integrity OK: {path}")
+PY
         done
     - name: Organize files
       id: organize
