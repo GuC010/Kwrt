@@ -146,12 +146,11 @@ jobs:
             install -m 0755 "$src" "$library"
             file "$library"
             readelf -h "$library" | grep -Eq 'Machine:.*AArch64'
-            actual_soname="$(readelf -d "$library" | sed -n 's/.*(SONAME).*\[\(.*\)\].*/\1/p')"
+            actual_soname="$(readelf -d "$library" | sed -n 's/.*(SONAME).*[[]\(.*\)[]].*/\1/p')"
             [ "$actual_soname" = "$soname" ] || {
               echo "::error::Unexpected SONAME for $pkg: $actual_soname (expected $soname)"
               exit 1
             }
-            readelf -d "$library" > "$root/CONTROL/elf-dynamic.txt"
             cat > "$root/CONTROL/control" <<EOF
           Package: $pkg
           Version: $version
@@ -165,6 +164,29 @@ jobs:
             "$PWD/scripts/ipkg-build" "$root" "$out/packages" >/dev/null
           }
 
+          # IPK is an ar archive containing control.tar.* and data.tar.*.
+          # Do not treat the outer .ipk as a gzip tar archive.
+          extract_ipk_member() {
+            local ipk="$1" member="$2" dest="$3"
+            local tmp="$work/ipk-inspect"
+            rm -rf "$tmp"
+            mkdir -p "$tmp"
+            (cd "$tmp" && ar x "$ipk")
+            local archive
+            archive="$(find "$tmp" -maxdepth 1 -type f -name "$member" -print -quit)"
+            [ -n "$archive" ] || {
+              echo "::error::Missing $member in $ipk"
+              return 1
+            }
+            case "$archive" in
+              *.tar.gz|*.tgz) tar -xOzf "$archive" > "$dest" ;;
+              *.tar.xz)       tar -xOJf "$archive" > "$dest" ;;
+              *.tar.zst)      tar --zstd -xOf "$archive" > "$dest" ;;
+              *.tar)          cat "$archive" > "$dest" ;;
+              *) echo "::error::Unsupported archive format: $archive"; return 1 ;;
+            esac
+          }
+
           gcc_version="$(grep -m1 '^CONFIG_GCC_VERSION=' .config | cut -d= -f2 | tr -d '"')"
           [ -n "$gcc_version" ] || gcc_version="$(grep -m1 '^CONFIG_GCC_USE_VERSION_' .config | sed 's/.*VERSION_//;s/=y//')"
           pkg_version="${gcc_version:-14.3.0}-r5"
@@ -174,15 +196,31 @@ jobs:
 
           for pkg in "$out"/packages/*.ipk; do
             echo "===== $pkg ====="
-            control="$(tar -xzOf "$pkg" ./CONTROL/control)"
-            printf '%s\n' "$control"
-            printf '%s\n' "$control" | grep -qx 'Architecture: aarch64_cortex-a53'
-            data_files="$(tar -tzf "$pkg" | grep '^\./lib/' || true)"
-            test -n "$data_files"
+            inspect="$work/$(basename "$pkg").inspect"
+            mkdir -p "$inspect"
+            rm -f "$work/control.tar.contents" "$work/data.tar.contents"
+            extract_ipk_member "$pkg" "control.tar.gz" "$work/control.tar.contents" || {
+              # Accept xz/zstd/uncompressed control archive names as emitted by other builders.
+              archive_name="$(ar t "$pkg" | grep '^control\.tar' | head -n1)"
+              [ -n "$archive_name" ] || exit 1
+              extract_ipk_member "$pkg" "$archive_name" "$work/control.tar.contents"
+            }
+            tar -tf "$work/control.tar.contents" > "$inspect/control-files.txt"
+            tar -xOf "$work/control.tar.contents" ./control > "$inspect/control"
+            cat "$inspect/control"
+            grep -qx 'Architecture: aarch64_cortex-a53' "$inspect/control"
+
+            archive_name="$(ar t "$pkg" | grep '^data\.tar' | head -n1)"
+            [ -n "$archive_name" ]
+            extract_ipk_member "$pkg" "$archive_name" "$work/data.tar.contents"
+            tar -tf "$work/data.tar.contents" > "$inspect/data-files.txt"
+            grep -qE '^\./?lib/' "$inspect/data-files.txt"
+
             if [[ "$pkg" == *libatomic1_* ]]; then
-              printf '%s\n' "$data_files" | grep -q 'libatomic.so.1'
-              tar -xOzf "$pkg" "./lib/libatomic.so.1" > "$work/extracted-libatomic.so.1"
+              grep -qE '^\./?lib/libatomic\.so\.1$' "$inspect/data-files.txt"
+              tar -xOf "$work/data.tar.contents" ./lib/libatomic.so.1 > "$work/extracted-libatomic.so.1"
               readelf -h "$work/extracted-libatomic.so.1" | grep -Eq 'Machine:.*AArch64'
+              readelf -d "$work/extracted-libatomic.so.1" | grep -q 'SONAME.*libatomic.so.1'
             fi
           done
 
