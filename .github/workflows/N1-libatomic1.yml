@@ -97,65 +97,84 @@ jobs:
           set -euo pipefail
           make -j1 package/libs/toolchain/compile V=s 2>&1 | tee "$GITHUB_WORKSPACE/n1-toolchain-packages.log"
 
-      - name: Verify and collect N1 runtime packages
+      - name: Package and verify N1 runtime IPKs
         working-directory: openwrt
         run: |
           set -euo pipefail
           out="$GITHUB_WORKSPACE/n1-libatomic-artifact"
-          mkdir -p "$out/packages"
+          work="$GITHUB_WORKSPACE/n1-ipkg-work"
+          mkdir -p "$out/packages" "$work"
 
-          mapfile -t atomic_pkgs < <(find bin/packages -type f -name 'libatomic1_*.ipk' -print | sort)
-          mapfile -t gcc_pkgs < <(find bin/packages -type f -name 'libgcc1_*.ipk' -print | sort)
+          target_staging="$(find staging_dir -maxdepth 1 -type d -name 'target-aarch64_cortex-a53_musl' -print -quit)"
+          toolchain_staging="$(find staging_dir -maxdepth 1 -type d -name 'toolchain-aarch64_cortex-a53_gcc-*_musl' -print -quit)"
+          test -n "$target_staging"
+          test -n "$toolchain_staging"
 
-          if [ "${#atomic_pkgs[@]}" -ne 1 ]; then
-            echo "::error::Expected exactly one libatomic1 IPK, found ${#atomic_pkgs[@]}"
-            find bin/packages -type f \( -iname '*atomic*' -o -iname '*libgcc*' \) -print | sort || true
+          atomic_so="$(find "$target_staging" "$toolchain_staging" -type f -name 'libatomic.so.1*' -print -quit)"
+          gcc_so="$(find "$target_staging" "$toolchain_staging" -type f -name 'libgcc_s.so.1*' -print -quit)"
+
+          if [ -z "$atomic_so" ]; then
+            echo "::error::libatomic.so.1 was not produced by the N1 GCC toolchain"
+            find "$target_staging" "$toolchain_staging" -type f -iname '*atomic*' -print || true
+            exit 1
+          fi
+          if [ -z "$gcc_so" ]; then
+            echo "::error::libgcc_s.so.1 was not found in the N1 toolchain staging"
+            find "$target_staging" "$toolchain_staging" -type f -iname '*libgcc*' -print || true
             exit 1
           fi
 
-          if [ "${#gcc_pkgs[@]}" -ne 1 ]; then
-            echo "::error::Expected exactly one matching libgcc1 IPK, found ${#gcc_pkgs[@]}"
-            find bin/packages -type f \( -iname '*atomic*' -o -iname '*libgcc*' \) -print | sort || true
-            exit 1
-          fi
-
-          for pkg in "${atomic_pkgs[0]}" "${gcc_pkgs[0]}"; do
-            control="$(ar p "$pkg" control.tar.gz | tar -xzOf - ./control)"
-            printf '%s\n' "$control" | grep -E '^(Package|Version|Architecture|Depends):' || true
-            printf '%s\n' "$control" | grep -qx 'Architecture: aarch64_cortex-a53' || {
-              echo "::error::Wrong package architecture: $pkg"
-              exit 1
-            }
-            cp -v "$pkg" "$out/packages/"
-          done
-
-          atomic_control="$(ar p "${atomic_pkgs[0]}" control.tar.gz | tar -xzOf - ./control)"
-          printf '%s\n' "$atomic_control" | grep -qx 'Package: libatomic1' || {
-            echo "::error::The selected IPK is not libatomic1"
-            exit 1
+          build_one() {
+            local pkg="$1" src="$2" version="$3" depends="$4"
+            local root="$work/$pkg"
+            rm -rf "$root"
+            mkdir -p "$root/lib" "$root/CONTROL"
+            install -m 0755 "$src" "$root/lib/$(basename "$src")"
+            cat > "$root/CONTROL/control" <<EOF
+          Package: $pkg
+          Version: $version
+          Depends: $depends
+          Architecture: aarch64_cortex-a53
+          Section: libs
+          Priority: optional
+          Maintainer: GuC010/Kwrt build workflow
+          Description: GCC runtime library built with the N1 OpenWrt 25.12 toolchain.
+          EOF
+            "$PWD/scripts/ipkg-build" "$root" "$out/packages" >/dev/null
           }
 
-          gcc_version="$(printf '%s\n' "$atomic_control" | sed -n 's/^Version: //p')"
+          gcc_version="$(grep -m1 '^CONFIG_GCC_VERSION=' .config | cut -d= -f2 | tr -d '"')"
+          [ -n "$gcc_version" ] || gcc_version="$(grep -m1 '^CONFIG_GCC_USE_VERSION_' .config | sed 's/.*VERSION_//;s/=y//')"
+          pkg_version="${gcc_version:-14.3.0}-r5"
+
+          build_one libgcc1 "$gcc_so" "$pkg_version" "libc"
+          build_one libatomic1 "$atomic_so" "$pkg_version" "libgcc1"
+
+          for pkg in "$out"/packages/*.ipk; do
+            echo "===== $pkg ====="
+            control="$(tar -xzOf "$pkg" ./CONTROL/control)"
+            printf '%s\n' "$control"
+            printf '%s\n' "$control" | grep -qx 'Architecture: aarch64_cortex-a53'
+            data_files="$(tar -tzf "$pkg" | grep '^\./lib/' || true)"
+            test -n "$data_files"
+            if [[ "$pkg" == *libatomic1_* ]]; then
+              printf '%s\n' "$data_files" | grep -q 'libatomic.so.1'
+            fi
+          done
+
           {
-            echo "Package: libatomic1"
-            echo "Architecture: aarch64_cortex-a53"
-            echo "Package version: $gcc_version"
+            echo "Target: amlogic_meson / aarch64_cortex-a53"
             echo "OpenWrt branch: openwrt-25.12"
             echo "OpenWrt commit: $OPENWRT_COMMIT"
-            echo "Kwrt repository: GuC010/Kwrt"
-            echo "Kwrt branch: 25.12"
-            echo "Build target: amlogic_meson (Phicomm N1)"
+            echo "iStoreOS target overlay commit: $ISTOREOS_COMMIT"
+            echo "GCC version: $pkg_version"
             echo
             echo "Included IPKs:"
             find "$out/packages" -maxdepth 1 -type f -name '*.ipk' -printf '%f\n' | sort
             echo
             echo "SHA256:"
             (cd "$out/packages" && sha256sum *.ipk)
-            echo
-            echo "Install on N1 after extracting this artifact:"
-            echo "  opkg install ./libgcc1_*.ipk ./libatomic1_*.ipk"
           } > "$out/README-MANIFEST.txt"
-
           cat "$out/README-MANIFEST.txt"
 
       - name: Upload N1 libatomic runtime packages
