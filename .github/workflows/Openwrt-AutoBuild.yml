@@ -392,6 +392,7 @@ jobs:
 
     - name: Verify N1 SquashFS artifact and prepare eMMC bundle
       id: verify_n1_image
+      continue-on-error: false
       run: |
         set -euo pipefail
         target_dir=openwrt/bin/targets/amlogic/meson
@@ -400,6 +401,8 @@ jobs:
         test -d "$target_dir"
         echo "== N1 target output files =="
         find "$target_dir" -maxdepth 1 -type f -printf '%f (%s bytes)\\n' | sort
+        echo "GITHUB_SHA=$GITHUB_SHA"
+        echo "Bundle directory: $bundle_dir"
         if find "$target_dir" -maxdepth 1 -type f -iname '*phicomm_n1*ext4*' | grep -q .; then
           echo '::error::An EXT4 N1 image was generated; refusing to publish.'
           exit 1
@@ -449,8 +452,8 @@ print(f'gzip stream/CRC OK; disk image size={size}; partitions={parts}; sha256={
 PY
         cp "$image" "$bundle_dir/"
         cp openwrt/.config "$bundle_dir/n1-firmware.config"
-        cp "$target_dir/kwrt-amlogic-meson.manifest" "$bundle_dir/"
-        (cd "$bundle_dir" && sha256sum *.img *.gz *.config *.manifest > SHA256SUMS)
+        cp "$target_dir/kwrt-amlogic-meson.manifest" "$bundle_dir/" 
+        (cd "$bundle_dir" && sha256sum phicomm_n1-squashfs-sysupgrade.img phicomm_n1-squashfs-sysupgrade.img.gz n1-firmware.config kwrt-amlogic-meson.manifest > SHA256SUMS)
         cat > "$bundle_dir/README-eMMC-CN.txt" <<'EOF'
         斐讯 N1 / Amlogic Meson eMMC 固件资料包
         ========================================
