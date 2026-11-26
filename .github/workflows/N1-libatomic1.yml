@@ -110,8 +110,21 @@ jobs:
           test -n "$target_staging"
           test -n "$toolchain_staging"
 
-          atomic_so="$(find "$target_staging" "$toolchain_staging" -type f -name 'libatomic.so.1*' -print -quit)"
-          gcc_so="$(find "$target_staging" "$toolchain_staging" -type f -name 'libgcc_s.so.1*' -print -quit)"
+          # Prefer target package staging. Only accept real ELF runtime files,
+          # not linker scripts or development symlinks.
+          find_runtime() {
+            local name="$1" base candidate
+            for base in "$target_staging" "$toolchain_staging"; do
+              candidate="$(find "$base" -type f -name "$name" -print -quit)"
+              if [ -n "$candidate" ]; then
+                printf '%s\n' "$candidate"
+                return 0
+              fi
+            done
+            return 1
+          }
+          atomic_so="$(find_runtime 'libatomic.so.1')" || true
+          gcc_so="$(find_runtime 'libgcc_s.so.1')" || true
 
           if [ -z "$atomic_so" ]; then
             echo "::error::libatomic.so.1 was not produced by the N1 GCC toolchain"
@@ -130,6 +143,8 @@ jobs:
             rm -rf "$root"
             mkdir -p "$root/lib" "$root/CONTROL"
             install -m 0755 "$src" "$root/lib/$(basename "$src")"
+            file "$root/lib/$(basename "$src")"
+            readelf -h "$root/lib/$(basename "$src")" | grep -Eq 'Machine:.*AArch64'
             cat > "$root/CONTROL/control" <<EOF
           Package: $pkg
           Version: $version
@@ -159,6 +174,8 @@ jobs:
             test -n "$data_files"
             if [[ "$pkg" == *libatomic1_* ]]; then
               printf '%s\n' "$data_files" | grep -q 'libatomic.so.1'
+              tar -xOzf "$pkg" "./lib/libatomic.so.1" > "$work/extracted-libatomic.so.1"
+              readelf -h "$work/extracted-libatomic.so.1" | grep -Eq 'Machine:.*AArch64'
             fi
           done
 
