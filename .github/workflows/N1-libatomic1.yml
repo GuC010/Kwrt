@@ -115,7 +115,8 @@ jobs:
           find_runtime() {
             local name="$1" base candidate
             for base in "$target_staging" "$toolchain_staging"; do
-              candidate="$(find "$base" -type f -name "$name" -print -quit)"
+              # -L follows staging symlinks while retaining the SONAME path.
+              candidate="$(find -L "$base" -type f -name "$name" -print -quit)"
               if [ -n "$candidate" ]; then
                 printf '%s\n' "$candidate"
                 return 0
@@ -138,13 +139,19 @@ jobs:
           fi
 
           build_one() {
-            local pkg="$1" src="$2" version="$3" depends="$4"
-            local root="$work/$pkg"
+            local pkg="$1" src="$2" soname="$3" version="$4" depends="$5"
+            local root="$work/$pkg" library="$work/$pkg/lib/$soname"
             rm -rf "$root"
             mkdir -p "$root/lib" "$root/CONTROL"
-            install -m 0755 "$src" "$root/lib/$(basename "$src")"
-            file "$root/lib/$(basename "$src")"
-            readelf -h "$root/lib/$(basename "$src")" | grep -Eq 'Machine:.*AArch64'
+            install -m 0755 "$src" "$library"
+            file "$library"
+            readelf -h "$library" | grep -Eq 'Machine:.*AArch64'
+            actual_soname="$(readelf -d "$library" | sed -n 's/.*(SONAME).*\[\(.*\)\].*/\1/p')"
+            [ "$actual_soname" = "$soname" ] || {
+              echo "::error::Unexpected SONAME for $pkg: $actual_soname (expected $soname)"
+              exit 1
+            }
+            readelf -d "$library" > "$root/CONTROL/elf-dynamic.txt"
             cat > "$root/CONTROL/control" <<EOF
           Package: $pkg
           Version: $version
@@ -162,8 +169,8 @@ jobs:
           [ -n "$gcc_version" ] || gcc_version="$(grep -m1 '^CONFIG_GCC_USE_VERSION_' .config | sed 's/.*VERSION_//;s/=y//')"
           pkg_version="${gcc_version:-14.3.0}-r5"
 
-          build_one libgcc1 "$gcc_so" "$pkg_version" "libc"
-          build_one libatomic1 "$atomic_so" "$pkg_version" "libgcc1"
+          build_one libgcc1 "$gcc_so" "libgcc_s.so.1" "$pkg_version" "libc"
+          build_one libatomic1 "$atomic_so" "libatomic.so.1" "$pkg_version" "libgcc1"
 
           for pkg in "$out"/packages/*.ipk; do
             echo "===== $pkg ====="
