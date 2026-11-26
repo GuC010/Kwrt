@@ -390,47 +390,88 @@ jobs:
         if-no-files-found: warn
         retention-days: 7
 
-    - name: Verify N1 SquashFS artifact
+    - name: Verify N1 SquashFS artifact and prepare eMMC bundle
+      id: verify_n1_image
       run: |
         set -euo pipefail
         target_dir=openwrt/bin/targets/amlogic/meson
+        bundle_dir="$GITHUB_WORKSPACE/n1-emmc-flash"
+        mkdir -p "$bundle_dir"
         test -d "$target_dir"
-        find "$target_dir" -maxdepth 1 -type f -printf '%f\n' | sort
-        if find "$target_dir" -maxdepth 1 -type f -iname '*phicomm_n1*ext4*' | grep -q .; then echo '::error::An EXT4 N1 image was generated; refusing to publish.'; exit 1; fi
-        mapfile -t images < <(find "$target_dir" -maxdepth 1 -type f -iname '*phicomm_n1*squashfs*' | sort)
-        if [ "${#images[@]}" -eq 0 ]; then
-          echo '::error::No Phicomm N1 SquashFS image was generated; refusing to publish this build.'
+        echo "== N1 target output files =="
+        find "$target_dir" -maxdepth 1 -type f -printf '%f (%s bytes)\\n' | sort
+        if find "$target_dir" -maxdepth 1 -type f -iname '*phicomm_n1*ext4*' | grep -q .; then
+          echo '::error::An EXT4 N1 image was generated; refusing to publish.'
           exit 1
         fi
-        printf 'Verified N1 SquashFS image: %s\n' "${images[@]}"
-        for image in "${images[@]}"; do
-          python3 - "$image" <<'PY'
-import sys
-import zlib
-
-path = sys.argv[1]
-decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
-trailing = 0
-with open(path, "rb") as stream:
+        mapfile -t images < <(find "$target_dir" -maxdepth 1 -type f -iname '*phicomm_n1*squashfs*sysupgrade.img.gz' | sort)
+        if [ "${#images[@]}" -ne 1 ]; then
+          echo "::error::Expected exactly one Phicomm N1 SquashFS sysupgrade image; found ${#images[@]}."
+          exit 1
+        fi
+        image="${images[0]}"
+        python3 - "$image" "$bundle_dir/phicomm_n1-squashfs-sysupgrade.img" <<'PY'
+import gzip, hashlib, os, struct, sys
+src, dst = sys.argv[1], sys.argv[2]
+with open(src, 'rb') as f:
+    if f.read(2) != b'\x1f\x8b':
+        raise SystemExit('::error::N1 image is not gzip')
+with gzip.open(src, 'rb') as inp, open(dst, 'wb') as out:
     while True:
-        chunk = stream.read(65536)
-        if not chunk:
-            break
-        if decoder.eof:
-            trailing += len(chunk)
-            continue
-        decoder.decompress(chunk)
-        if decoder.eof:
-            trailing += len(decoder.unused_data)
-
-if not decoder.eof:
-    raise SystemExit(f"::error::Incomplete or truncated gzip stream: {path}")
-if trailing:
-    print(f"::warning::Valid gzip payload; ignoring {trailing} trailing byte(s): {path}")
-else:
-    print(f"gzip integrity OK: {path}")
+        chunk = inp.read(1024 * 1024)
+        if not chunk: break
+        out.write(chunk)
+    out.flush(); os.fsync(out.fileno())
+size = os.path.getsize(dst)
+if size < 16 * 1024 * 1024:
+    raise SystemExit(f'::error::Decompressed disk image is too small: {size}')
+with open(dst, 'rb') as f: mbr = f.read(512)
+if len(mbr) != 512 or mbr[510:512] != b'\x55\xaa':
+    raise SystemExit('::error::No valid MBR signature in decompressed N1 image')
+parts = []
+for i in range(4):
+    ent = mbr[446+i*16:462+i*16]
+    ptype = ent[4]; first, count = struct.unpack_from('<II', ent, 8)
+    if ptype and count:
+        if (first + count) * 512 > size:
+            raise SystemExit(f'::error::Partition {i+1} exceeds disk image bounds')
+        parts.append((ptype, first, count))
+if len(parts) < 2:
+    raise SystemExit(f'::error::Expected multiple disk partitions, found {parts}')
+with open(dst, 'rb') as f:
+    f.seek(1024 * 1024); probe = f.read(16 * 1024 * 1024)
+if b'hsqs' not in probe:
+    raise SystemExit('::error::SquashFS magic not found in expected image area')
+h = hashlib.sha256()
+with open(dst, 'rb') as f:
+    for chunk in iter(lambda: f.read(1024*1024), b''): h.update(chunk)
+print(f'gzip stream/CRC OK; disk image size={size}; partitions={parts}; sha256={h.hexdigest()}')
 PY
-        done
+        cp "$image" "$bundle_dir/"
+        cp openwrt/.config "$bundle_dir/n1-firmware.config"
+        cp "$target_dir/kwrt-amlogic-meson.manifest" "$bundle_dir/"
+        (cd "$bundle_dir" && sha256sum *.img *.gz *.config *.manifest > SHA256SUMS)
+        cat > "$bundle_dir/README-eMMC-CN.txt" <<'EOF'
+        斐讯 N1 / Amlogic Meson eMMC 固件资料包
+        ========================================
+        固件为 gzip 压缩的整盘镜像，包含分区表、FAT 启动分区、内核与 SquashFS 根文件系统。
+        它不是普通 sysupgrade tar 包；禁止将 .img.gz 直接 dd 写入 eMMC。
+        建议先从 USB/SD 外置介质启动验证，再按适用于斐讯 N1 的官方/上游 eMMC 安装流程操作。
+        任何写盘前先备份 eMMC，并用 lsblk 明确确认目标块设备；不要盲目假设 /dev/mmcblk0。
+        除非 N1 专用流程明确要求，否则保留原厂 U-Boot。
+        .img 是解压后的整盘镜像，仅供检查或符合设备流程的安装，不会自动刷写。
+        使用前请校验 SHA256SUMS。
+        EOF
+        echo "N1 eMMC bundle files:"
+        find "$bundle_dir" -maxdepth 1 -type f -printf '%f (%s bytes)\\n' | sort
+    - name: Upload N1 eMMC flash bundle
+      if: success() && matrix.target == 'amlogic_meson'
+      uses: actions/upload-artifact@v4
+      with:
+        name: N1-eMMC-SquashFS-${{ github.run_number }}
+        path: n1-emmc-flash/
+        if-no-files-found: error
+        retention-days: 30
     - name: Organize files
       id: organize
       continue-on-error: true
