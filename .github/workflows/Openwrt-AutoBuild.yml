@@ -414,42 +414,42 @@ jobs:
         fi
         image="${images[0]}"
         python3 - "$image" "$bundle_dir/phicomm_n1-squashfs-sysupgrade.img" <<'PY'
-import gzip, hashlib, os, struct, sys
-src, dst = sys.argv[1], sys.argv[2]
-with open(src, 'rb') as f:
-    if f.read(2) != b'\x1f\x8b':
-        raise SystemExit('::error::N1 image is not gzip')
-with gzip.open(src, 'rb') as inp, open(dst, 'wb') as out:
-    while True:
-        chunk = inp.read(1024 * 1024)
-        if not chunk: break
-        out.write(chunk)
-    out.flush(); os.fsync(out.fileno())
-size = os.path.getsize(dst)
-if size < 16 * 1024 * 1024:
-    raise SystemExit(f'::error::Decompressed disk image is too small: {size}')
-with open(dst, 'rb') as f: mbr = f.read(512)
-if len(mbr) != 512 or mbr[510:512] != b'\x55\xaa':
-    raise SystemExit('::error::No valid MBR signature in decompressed N1 image')
-parts = []
-for i in range(4):
-    ent = mbr[446+i*16:462+i*16]
-    ptype = ent[4]; first, count = struct.unpack_from('<II', ent, 8)
-    if ptype and count:
-        if (first + count) * 512 > size:
-            raise SystemExit(f'::error::Partition {i+1} exceeds disk image bounds')
-        parts.append((ptype, first, count))
-if len(parts) < 2:
-    raise SystemExit(f'::error::Expected multiple disk partitions, found {parts}')
-with open(dst, 'rb') as f:
-    f.seek(1024 * 1024); probe = f.read(16 * 1024 * 1024)
-if b'hsqs' not in probe:
-    raise SystemExit('::error::SquashFS magic not found in expected image area')
-h = hashlib.sha256()
-with open(dst, 'rb') as f:
-    for chunk in iter(lambda: f.read(1024*1024), b''): h.update(chunk)
-print(f'gzip stream/CRC OK; disk image size={size}; partitions={parts}; sha256={h.hexdigest()}')
-PY
+        import gzip, hashlib, os, struct, sys
+        src, dst = sys.argv[1], sys.argv[2]
+        with open(src, 'rb') as f:
+            if f.read(2) != b'\x1f\x8b':
+                raise SystemExit('::error::N1 image is not gzip')
+        with gzip.open(src, 'rb') as inp, open(dst, 'wb') as out:
+            while True:
+                chunk = inp.read(1024 * 1024)
+                if not chunk: break
+                out.write(chunk)
+            out.flush(); os.fsync(out.fileno())
+        size = os.path.getsize(dst)
+        if size < 16 * 1024 * 1024:
+            raise SystemExit(f'::error::Decompressed disk image is too small: {size}')
+        with open(dst, 'rb') as f: mbr = f.read(512)
+        if len(mbr) != 512 or mbr[510:512] != b'\x55\xaa':
+            raise SystemExit('::error::No valid MBR signature in decompressed N1 image')
+        parts = []
+        for i in range(4):
+            ent = mbr[446+i*16:462+i*16]
+            ptype = ent[4]; first, count = struct.unpack_from('<II', ent, 8)
+            if ptype and count:
+                if (first + count) * 512 > size:
+                    raise SystemExit(f'::error::Partition {i+1} exceeds disk image bounds')
+                parts.append((ptype, first, count))
+        if len(parts) < 2:
+            raise SystemExit(f'::error::Expected multiple disk partitions, found {parts}')
+        with open(dst, 'rb') as f:
+            f.seek(1024 * 1024); probe = f.read(16 * 1024 * 1024)
+        if b'hsqs' not in probe:
+            raise SystemExit('::error::SquashFS magic not found in expected image area')
+        h = hashlib.sha256()
+        with open(dst, 'rb') as f:
+            for chunk in iter(lambda: f.read(1024*1024), b''): h.update(chunk)
+        print(f'gzip stream/CRC OK; disk image size={size}; partitions={parts}; sha256={h.hexdigest()}')
+        PY
         cp "$image" "$bundle_dir/"
         cp openwrt/.config "$bundle_dir/n1-firmware.config"
         cp "$target_dir/kwrt-amlogic-meson.manifest" "$bundle_dir/" 
