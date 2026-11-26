@@ -46,6 +46,20 @@ jobs:
           echo "OPENWRT_COMMIT=$(git -C openwrt rev-parse HEAD)" >> "$GITHUB_ENV"
           echo "OpenWrt source commit: $(git -C openwrt rev-parse HEAD)"
 
+      - name: Apply the same Amlogic target definition used by Kwrt
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch istoreos-25.12 --filter=blob:none --sparse \
+            https://github.com/istoreos/istoreos.git istoreos-overlay
+          git -C istoreos-overlay sparse-checkout set \
+            target/linux/amlogic package/boot/uboot-amlogic-prebuilt
+          cp -rn istoreos-overlay/target/linux/amlogic openwrt/target/linux/
+          mkdir -p openwrt/package/boot
+          cp -rn istoreos-overlay/package/boot/uboot-amlogic-prebuilt openwrt/package/boot/
+          test -f openwrt/target/linux/amlogic/Makefile
+          grep -E '^(BOARD|SUBTARGETS|KERNEL_PATCHVER):=' openwrt/target/linux/amlogic/Makefile
+          echo "ISTOREOS_COMMIT=$(git -C istoreos-overlay rev-parse HEAD)" >> "$GITHUB_ENV"
+
       - name: Configure N1 target and libatomic
         working-directory: openwrt
         run: |
