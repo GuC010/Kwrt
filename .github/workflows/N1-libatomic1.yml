@@ -1,0 +1,165 @@
+name: Build N1 libatomic1 package
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 25.12
+    paths:
+      - '.github/workflows/N1-libatomic1.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: n1-libatomic1-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-libatomic:
+    name: Build libatomic1 for N1 (aarch64_cortex-a53)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout Kwrt repository
+        uses: actions/checkout@v4
+
+      - name: Install OpenWrt build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses5-dev libssl-dev python3-setuptools rsync swig \
+            unzip zlib1g-dev file wget python3-pyelftools libpython3-dev \
+            libelf-dev libgmp3-dev libmpc-dev
+          sudo apt-get clean
+
+      - name: Clone OpenWrt 25.12 source
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch openwrt-25.12 \
+            https://github.com/openwrt/openwrt.git openwrt
+          echo "OPENWRT_COMMIT=$(git -C openwrt rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "OpenWrt source commit: $(git -C openwrt rev-parse HEAD)"
+
+      - name: Configure N1 target and libatomic
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+          cat > .config <<'EOF'
+          CONFIG_TARGET_amlogic=y
+          CONFIG_TARGET_amlogic_meson=y
+          CONFIG_TARGET_MULTI_PROFILE=y
+          CONFIG_TARGET_ALL_PROFILES=y
+          CONFIG_PACKAGE_libgcc=y
+          CONFIG_PACKAGE_libatomic=y
+          EOF
+
+          make defconfig
+
+          echo "===== Target configuration ====="
+          grep -E '^CONFIG_TARGET_(amlogic|amlogic_meson|MULTI_PROFILE|ALL_PROFILES)=' .config
+          echo "===== GCC and package selection ====="
+          grep -E '^(CONFIG_GCC_USE_VERSION_|CONFIG_PACKAGE_libgcc=|CONFIG_PACKAGE_libatomic=)' .config || true
+
+          grep -qx 'CONFIG_TARGET_amlogic=y' .config
+          grep -qx 'CONFIG_TARGET_amlogic_meson=y' .config
+          grep -qx 'CONFIG_PACKAGE_libatomic=y' .config
+          grep -qx 'CONFIG_PACKAGE_libgcc=y' .config
+
+      - name: Build target toolchain (serial)
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+          make -j1 toolchain/install V=s 2>&1 | tee "$GITHUB_WORKSPACE/n1-toolchain.log"
+
+      - name: Build libatomic1 and matching libgcc1 IPKs
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+          make -j1 package/libs/toolchain/compile V=s 2>&1 | tee "$GITHUB_WORKSPACE/n1-toolchain-packages.log"
+
+      - name: Verify and collect N1 runtime packages
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+          out="$GITHUB_WORKSPACE/n1-libatomic-artifact"
+          mkdir -p "$out/packages"
+
+          mapfile -t atomic_pkgs < <(find bin/packages -type f -name 'libatomic1_*.ipk' -print | sort)
+          mapfile -t gcc_pkgs < <(find bin/packages -type f -name 'libgcc1_*.ipk' -print | sort)
+
+          if [ "${#atomic_pkgs[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one libatomic1 IPK, found ${#atomic_pkgs[@]}"
+            find bin/packages -type f \( -iname '*atomic*' -o -iname '*libgcc*' \) -print | sort || true
+            exit 1
+          fi
+
+          if [ "${#gcc_pkgs[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one matching libgcc1 IPK, found ${#gcc_pkgs[@]}"
+            find bin/packages -type f \( -iname '*atomic*' -o -iname '*libgcc*' \) -print | sort || true
+            exit 1
+          fi
+
+          for pkg in "${atomic_pkgs[0]}" "${gcc_pkgs[0]}"; do
+            control="$(ar p "$pkg" control.tar.gz | tar -xzOf - ./control)"
+            printf '%s\n' "$control" | grep -E '^(Package|Version|Architecture|Depends):' || true
+            printf '%s\n' "$control" | grep -qx 'Architecture: aarch64_cortex-a53' || {
+              echo "::error::Wrong package architecture: $pkg"
+              exit 1
+            }
+            cp -v "$pkg" "$out/packages/"
+          done
+
+          atomic_control="$(ar p "${atomic_pkgs[0]}" control.tar.gz | tar -xzOf - ./control)"
+          printf '%s\n' "$atomic_control" | grep -qx 'Package: libatomic1' || {
+            echo "::error::The selected IPK is not libatomic1"
+            exit 1
+          }
+
+          gcc_version="$(printf '%s\n' "$atomic_control" | sed -n 's/^Version: //p')"
+          {
+            echo "Package: libatomic1"
+            echo "Architecture: aarch64_cortex-a53"
+            echo "Package version: $gcc_version"
+            echo "OpenWrt branch: openwrt-25.12"
+            echo "OpenWrt commit: $OPENWRT_COMMIT"
+            echo "Kwrt repository: GuC010/Kwrt"
+            echo "Kwrt branch: 25.12"
+            echo "Build target: amlogic_meson (Phicomm N1)"
+            echo
+            echo "Included IPKs:"
+            find "$out/packages" -maxdepth 1 -type f -name '*.ipk' -printf '%f\n' | sort
+            echo
+            echo "SHA256:"
+            (cd "$out/packages" && sha256sum *.ipk)
+            echo
+            echo "Install on N1 after extracting this artifact:"
+            echo "  opkg install ./libgcc1_*.ipk ./libatomic1_*.ipk"
+          } > "$out/README-MANIFEST.txt"
+
+          cat "$out/README-MANIFEST.txt"
+
+      - name: Upload N1 libatomic runtime packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: n1-libatomic1-${{ github.run_number }}
+          path: n1-libatomic-artifact/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: n1-libatomic-build-diagnostics-${{ github.run_number }}
+          path: |
+            n1-toolchain.log
+            n1-toolchain-packages.log
+            openwrt/.config
+          if-no-files-found: warn
+          retention-days: 7
